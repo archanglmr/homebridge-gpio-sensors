@@ -1,0 +1,27 @@
+{
+  "name": "homebridge-gpio-sensors",
+  "version": "0.0.1",
+  "description": "Wire up your security systems sensors to a Raspberry Pi and use them in HomeKit",
+  "main": "index.js",
+  "license": "GPL-3.0",
+  "keywords": [
+    "homebridge-plugin",
+    "carbon dioxide sensor",
+    "carbon monoxide sensor",
+    "contact sensor",
+    "leak sensor",
+    "motion sensor",
+    "occupancy sensor",
+    "smoke sensor"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/archanglmr/homebridge-gpio-sensors.git"
+  },
+  "engines": {
+    "homebridge": ">=0.2.5"
+  },
+  "dependencies": {
+    "rpi-gpio": "^0.9.1"
+  }
+}
