@@ -1,6 +1,6 @@
 "use strict";
 
-var gpio = require('rpi-gpio');
+var rpio = require('rpio');
 var Service, Characteristic;
 
 module.exports = function(homebridge) {
@@ -13,12 +13,7 @@ module.exports = function(homebridge) {
 
 
 // setup global gpio object callbacks
-gpio.channel_callbacks = {};
-gpio.on('change', (channel, value) => {
-  if (gpio.channel_callbacks[channel]) {
-    gpio.channel_callbacks[channel](value);
-  }
-});
+rpio.channel_callbacks = {};
 
 
 class GPIOSensors {
@@ -26,10 +21,12 @@ class GPIOSensors {
     this.log = log;
     this.services = [];
 
-    for (let name in config.sensors) {
-      let sensorInfo = config.sensors[name],
+    for (let i = 0, c = config.sensors.length; i < c; i += 1) {
+      let sensorInfo = config.sensors[i],
           sensor = null;
+      if (!sensorInfo.pin) {  continue; }
 
+      log(`Creating ${sensorInfo.type} on pin ${sensorInfo.pin}`);
       switch(sensorInfo.type.toUpperCase()) {
         case 'C0':
         case 'CARBONMONOXIDE':
@@ -64,7 +61,9 @@ class GPIOSensors {
         default: break;
       }
 
+      log('Sensor complete');
       if (sensor) {
+        sensor.updateState(); // needed for initial state setting
         this.services = [...this.services, ...sensor.services];
       }
     }
@@ -98,8 +97,10 @@ class Sensor {
   constructor({name, pin, log, service, callback}) {
     this.state = false;
     this.name = name;
+    this.pin = pin;
+    this.setStateCallback = callback;
 
-    if (this.name == undefined || pin == undefined) {
+    if (this.name == undefined || this.pin == undefined) {
       throw "Specify name and pin in config file.";
     }
 
@@ -107,19 +108,21 @@ class Sensor {
     this._log = log;
     this.services = [service];
 
-    this.log(`Pin ${pin}`);
-    //this.services.push(this._createSwitch(pin, `${name} Pin ${pin}`, callback));
+    this.log(`Pin ${this.pin}`);
 
-    // register our read/update function. do this before calling super() so that
-    // initial value is recorded.
-    gpio.channel_callbacks[pin] = callback;
+    rpio.channel_callbacks[this.pin] = this.setStateCallback;
 
     // setup this sensors gpio pin
-    gpio.setup(pin, gpio.DIR_IN, gpio.EDGE_BOTH, () => {
-      gpio.read(pin, (err, value) => {
-        this.state = !!value;
-        gpio.channel_callbacks[pin](this.state);
-      });
+    rpio.open(this.pin, rpio.INPUT, rpio.PULL_UP);
+    this.state = !!rpio.read(this.pin);
+    rpio.poll(this.pin, (pin) => {
+      var state = !!rpio.read(this.pin);
+
+      if (state != this.state) {
+        this.log(`State changed from ${this.state} to ${state}`);
+        this.state = state;
+        rpio.channel_callbacks[this.pin](this.state);
+      }
     });
   }
 
@@ -136,24 +139,11 @@ class Sensor {
     return this.services;
   }
 
-  /**
-   * Internal helper function to create a new "Switch" that is ties to the
-   * status of this  Sensor.
-   *
-   * @param name
-   * @returns {Service.Switch|*}
-   * @private
-   */
-  //_createSwitch(pin, name, callback) {
-  //  var sw;
-  //
-  //  this.log('Create Switch: ' + name);
-  //  sw = new Service.Switch(name, pin);
-  //  sw.setCharacteristic(Characteristic.On, false);
-  //  sw.getCharacteristic(Characteristic.On).on('change', callback);
-  //
-  //  return sw;
-  //}
+  updateState() {
+    if (this.setStateCallback) {
+      this.setStateCallback(this.state);
+    }
+  }
 }
 
 
@@ -173,18 +163,18 @@ class CarbonDioxideSensor extends Sensor {
       log,
       service,
       callback: (value) => {
-        this.log(value.newValue);
+        this.log(value);
         service.setCharacteristic(Characteristic.CarbonDioxideDetected,
-            value.newValue ?
+            value ?
                 Characteristic.CarbonDioxideDetected.CO2_LEVELS_ABNORMAL :
                 Characteristic.CarbonDioxideDetected.CO2_LEVELS_NORMAL
         );
       }
     });
 
-    //service
-    //    .getCharacteristic(Characteristic.CarbonDioxideDetected)
-    //    .on('get', this.getState.bind(this));
+    service
+        .getCharacteristic(Characteristic.CarbonDioxideDetected)
+        .on('get', this.getState.bind(this));
   }
 }
 
@@ -198,18 +188,18 @@ class CarbonMonoxideSensor extends Sensor {
       log,
       service,
       callback: (value) => {
-        this.log(value.newValue);
+        this.log(value);
         service.setCharacteristic(Characteristic.CarbonMonoxideDetected,
-            value.newValue ?
+            value ?
                 Characteristic.CarbonMonoxideDetected.CO_LEVELS_ABNORMAL :
                 Characteristic.CarbonMonoxideDetected.CO_LEVELS_NORMAL
         );
       }
     });
 
-    //service
-    //    .getCharacteristic(Characteristic.CarbonMonoxideDetected)
-    //    .on('get', this.getState.bind(this));
+    service
+        .getCharacteristic(Characteristic.CarbonMonoxideDetected)
+        .on('get', this.getState.bind(this));
   }
 }
 
@@ -223,18 +213,18 @@ class ContactSensor extends Sensor {
       log,
       service,
       callback: (value) => {
-        this.log(value.newValue);
+        this.log(value);
         service.setCharacteristic(Characteristic.ContactSensorState,
-            value.newValue ?
+            value ?
                 // This one feels backwards but a contact sensor's normal state must be not in contact?
                 Characteristic.ContactSensorState.CONTACT_NOT_DETECTED :
                 Characteristic.ContactSensorState.CONTACT_DETECTED);
       }
     });
 
-    //service
-    //    .getCharacteristic(Characteristic.ContactSensorState)
-    //    .on('get', this.getState.bind(this));
+    service
+        .getCharacteristic(Characteristic.ContactSensorState)
+        .on('get', this.getState.bind(this));
   }
 }
 
@@ -248,18 +238,18 @@ class LeakSensor extends Sensor {
       log,
       service,
       callback: (value) => {
-        this.log(value.newValue);
+        this.log(value);
         service.setCharacteristic(Characteristic.LeakDetected,
-            value.newValue ?
+            value ?
                 Characteristic.LeakDetected.LEAK_DETECTED :
                 Characteristic.LeakDetected.LEAK_NOT_DETECTED
         );
       }
     });
 
-    //service
-    //    .getCharacteristic(Characteristic.LeakDetected)
-    //    .on('get', this.getState.bind(this));
+    service
+        .getCharacteristic(Characteristic.LeakDetected)
+        .on('get', this.getState.bind(this));
   }
 }
 
@@ -273,14 +263,14 @@ class MotionSensor extends Sensor {
       log,
       service,
       callback: (value) => {
-        this.log(value.newValue);
-        service.setCharacteristic(Characteristic.MotionDetected, value.newValue);
+        this.log(value);
+        service.setCharacteristic(Characteristic.MotionDetected, value);
       }
     });
 
-    //service
-    //    .getCharacteristic(Characteristic.MotionDetected)
-    //    .on('get', this.getState.bind(this));
+    service
+        .getCharacteristic(Characteristic.MotionDetected)
+        .on('get', this.getState.bind(this));
   }
 }
 
@@ -294,17 +284,17 @@ class OccupancySensor extends Sensor {
       log,
       service,
       callback: (value) => {
-        this.log(value.newValue);
+        this.log(value);
         service.setCharacteristic(Characteristic.OccupancyDetected,
-            value.newValue ?
+            value ?
                 Characteristic.OccupancyDetected.OCCUPANCY_DETECTED :
                 Characteristic.OccupancyDetected.OCCUPANCY_NOT_DETECTED);
       }
     });
 
-    //service
-    //    .getCharacteristic(Characteristic.OccupancyDetected)
-    //    .on('get', this.getState.bind(this));
+    service
+        .getCharacteristic(Characteristic.OccupancyDetected)
+        .on('get', this.getState.bind(this));
   }
 }
 
@@ -318,17 +308,17 @@ class SmokeSensor extends Sensor {
       log,
       service,
       callback: (value) => {
-        this.log(value.newValue);
+        this.log(value);
         service.setCharacteristic(Characteristic.SmokeDetected,
-            value.newValue ?
+            value ?
                 Characteristic.SmokeDetected.SMOKE_DETECTED :
                 Characteristic.SmokeDetected.SMOKE_NOT_DETECTED
         );
       }
     });
 
-    //service
-    //    .getCharacteristic(Characteristic.SmokeDetected)
-    //    .on('get', this.getState.bind(this));
+    service
+        .getCharacteristic(Characteristic.SmokeDetected)
+        .on('get', this.getState.bind(this));
   }
 }
